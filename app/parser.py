@@ -15,24 +15,98 @@ Returns:
 
 from docx import Document
 from docx.oxml.ns import qn
+from docx.text.run import Run
 import html
 
 
+def _run_element_to_html(r_el, paragraph) -> str:
+    """Convert a <w:r> element to inline HTML with bold/italic/underline formatting."""
+    run = Run(r_el, paragraph)
+    text = html.escape(run.text)
+    if not text:
+        return ""
+    if run.underline:
+        text = f"<u>{text}</u>"
+    if run.italic:
+        text = f"<em>{text}</em>"
+    if run.bold:
+        text = f"<strong>{text}</strong>"
+    return text
+
+
 def _runs_to_html(paragraph) -> str:
-    """Convert paragraph runs to inline HTML, preserving bold/italic/links."""
+    """Convert paragraph children to inline HTML, preserving bold/italic/links."""
     parts = []
-    for run in paragraph.runs:
-        text = html.escape(run.text)
-        if not text:
-            continue
-        if run.bold and run.italic:
-            text = f"<strong><em>{text}</em></strong>"
-        elif run.bold:
-            text = f"<strong>{text}</strong>"
-        elif run.italic:
-            text = f"<em>{text}</em>"
-        parts.append(text)
+    rels = paragraph.part.rels
+    for child in paragraph._p.iterchildren():
+        tag = child.tag
+        if tag == qn("w:r"):
+            parts.append(_run_element_to_html(child, paragraph))
+        elif tag == qn("w:hyperlink"):
+            inner = "".join(
+                _run_element_to_html(r, paragraph)
+                for r in child.findall(qn("w:r"))
+            )
+            if not inner:
+                continue
+            r_id = child.get(qn("r:id"))
+            anchor = child.get(qn("w:anchor"))
+            href = None
+            if r_id and r_id in rels:
+                href = rels[r_id].target_ref
+            elif anchor:
+                href = f"#{anchor}"
+            if href:
+                parts.append(f'<a href="{html.escape(href, quote=True)}">{inner}</a>')
+            else:
+                parts.append(inner)
     return "".join(parts)
+
+
+def _list_format_for(paragraph) -> str | None:
+    """Return 'ol' or 'ul' if paragraph is a list item, else None.
+
+    Resolves the actual numFmt from the document's numbering part instead of
+    guessing from the paragraph style name.
+    """
+    pPr = paragraph._p.find(qn("w:pPr"))
+    if pPr is None:
+        return None
+    numPr = pPr.find(qn("w:numPr"))
+    if numPr is None:
+        return None
+
+    numId_el = numPr.find(qn("w:numId"))
+    ilvl_el = numPr.find(qn("w:ilvl"))
+    if numId_el is None:
+        return "ul"
+    numId = numId_el.get(qn("w:val"))
+    ilvl = ilvl_el.get(qn("w:val")) if ilvl_el is not None else "0"
+
+    try:
+        numbering = paragraph.part.numbering_part.element
+    except (AttributeError, NotImplementedError, KeyError):
+        return "ul"
+
+    num = numbering.find(f"{qn('w:num')}[@{qn('w:numId')}='{numId}']")
+    if num is None:
+        return "ul"
+    abstract_id_el = num.find(qn("w:abstractNumId"))
+    if abstract_id_el is None:
+        return "ul"
+    abstract_id = abstract_id_el.get(qn("w:val"))
+
+    abstract = numbering.find(
+        f"{qn('w:abstractNum')}[@{qn('w:abstractNumId')}='{abstract_id}']"
+    )
+    if abstract is None:
+        return "ul"
+    lvl = abstract.find(f"{qn('w:lvl')}[@{qn('w:ilvl')}='{ilvl}']")
+    if lvl is None:
+        return "ul"
+    numFmt = lvl.find(qn("w:numFmt"))
+    fmt = numFmt.get(qn("w:val")) if numFmt is not None else "bullet"
+    return "ul" if fmt in ("bullet", "none") else "ol"
 
 
 def _para_to_html(paragraph) -> str | None:
@@ -44,20 +118,8 @@ def _para_to_html(paragraph) -> str | None:
     if not raw_text:
         return None
 
-    # List items
-    numPr = paragraph._p.find(qn("w:pPr"))
-    is_list = False
-    list_tag = "ul"
-    if numPr is not None:
-        numEl = numPr.find(qn("w:numPr"))
-        if numEl is not None:
-            is_list = True
-            ilvl = numEl.find(qn("w:ilvl"))
-            # Check number format — heuristic: if style has "List Number", use ol
-            if "Number" in style:
-                list_tag = "ol"
-
-    if is_list:
+    list_tag = _list_format_for(paragraph)
+    if list_tag:
         return f"<li data-list='{list_tag}'>{text}</li>"
 
     if style.startswith("Heading 3"):
