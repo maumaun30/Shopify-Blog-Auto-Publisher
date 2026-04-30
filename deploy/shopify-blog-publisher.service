@@ -1,0 +1,27 @@
+[Unit]
+Description=Shopify Blog Publisher (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_CLOUDPANEL_USER
+Group=YOUR_CLOUDPANEL_USER
+WorkingDirectory=/home/YOUR_CLOUDPANEL_USER/htdocs/YOUR_DOMAIN
+EnvironmentFile=/home/YOUR_CLOUDPANEL_USER/htdocs/YOUR_DOMAIN/.env
+ExecStart=/home/YOUR_CLOUDPANEL_USER/htdocs/YOUR_DOMAIN/.venv/bin/gunicorn \
+    main:app \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --workers 2 \
+    --bind 127.0.0.1:${APP_PORT} \
+    --timeout 300 \
+    --access-logfile /home/YOUR_CLOUDPANEL_USER/logs/shopify-blog-publisher-access.log \
+    --error-logfile /home/YOUR_CLOUDPANEL_USER/logs/shopify-blog-publisher-error.log
+Restart=on-failure
+RestartSec=5
+
+# Allow the app user to be restarted by the deploy workflow without a password.
+# Run: sudo visudo
+# Add: YOUR_CLOUDPANEL_USER ALL=(ALL) NOPASSWD: /bin/systemctl restart shopify-blog-publisher
+
+[Install]
+WantedBy=multi-user.target

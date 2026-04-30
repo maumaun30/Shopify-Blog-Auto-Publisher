@@ -1,0 +1,4 @@
+curl -X POST http://localhost:8000/publish-blog \
+  -F "file=@uploads/1.docx" \
+  -F "author=Kristine Mae Dimaandal" \
+  -F "published=false"
